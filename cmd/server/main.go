@@ -1,52 +1,49 @@
 package main
 
 import (
-	"context"
 	"log"
+	"net/http"
 	"os"
 
+	"github.com/abhinavpaste/crev/internal/db"
 	"github.com/abhinavpaste/crev/internal/handler"
 	"github.com/abhinavpaste/crev/internal/middleware"
-	"github.com/abhinavpaste/crev/internal/store"
-	"github.com/gin-gonic/gin"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
 )
 
 func main() {
-	godotenv.Load()
-
-	db, err := pgxpool.New(context.Background(), os.Getenv("DATABASE_URL"))
-	if err != nil {
-		log.Fatalf("cannot connect to db: %v", err)
+	if err := godotenv.Load(); err != nil {
+		log.Println("no .env file found, using system env")
+	} else {
+		log.Println("loaded .env:", os.Getenv("DATABASE_URL"))
 	}
-	defer db.Close()
 
-	if err := db.Ping(context.Background()); err != nil {
-		log.Fatalf("db ping failed: %v", err)
+	db.Init()
+
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok"))
+	})
+	mux.HandleFunc("/register", handler.Register)
+	mux.HandleFunc("/login", handler.Login)
+	mux.HandleFunc("/snippets/", handler.GetSnippet)
+	mux.HandleFunc("/snippets", middleware.Auth(handler.CreateSnippet))
+	server := &http.Server{
+		Addr:    ":8080",
+		Handler: mux,
 	}
-	log.Println("connected to database")
-
-	s := store.New(db)
-
-	authHandler := handler.NewAuthHandler(s)
-
-	r := gin.Default()
-
-	r.GET("/health", func(c *gin.Context) {
-		c.JSON(200, gin.H{"status": "ok"})
+	mux.HandleFunc("/snippets/{id}/comments", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			middleware.Auth(handler.CreateComment)(w, r)
+		} else {
+			handler.GetComments(w, r)
+		}
 	})
 
-	// public routes
-	r.POST("/register", authHandler.Register)
-	r.POST("/login", authHandler.Login)
-
-	// protected routes (snippet + comment handlers go here)
-	protected := r.Group("/")
-	protected.Use(middleware.AuthRequired())
-	_ = protected
-
-	port := os.Getenv("PORT")
-	log.Printf("server starting on :%s", port)
-	log.Fatal(r.Run(":" + port))
+	log.Println("crev running on :8080")
+	if err := server.ListenAndServe(); err != nil {
+		log.Fatal(err)
+	}
 }

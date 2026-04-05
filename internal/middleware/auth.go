@@ -1,33 +1,33 @@
 package middleware
 
 import (
+	"context"
 	"net/http"
-	"os"
 	"strings"
 
-	"github.com/gin-gonic/gin"
-	"github.com/golang-jwt/jwt/v5"
+	"github.com/abhinavpaste/crev/internal/auth"
 )
 
-func AuthRequired() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		header := c.GetHeader("Authorization")
-		if !strings.HasPrefix(header, "Bearer ") {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing token"})
+type contextKey string
+
+const UserIDKey contextKey = "user_id"
+
+func Auth(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		authHeader := r.Header.Get("Authorization")
+		if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
 
-		tokenStr := strings.TrimPrefix(header, "Bearer ")
-		token, err := jwt.Parse(tokenStr, func(t *jwt.Token) (interface{}, error) {
-			return []byte(os.Getenv("JWT_SECRET")), nil
-		})
-		if err != nil || !token.Valid {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
+		tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
+		userID, err := auth.ValidateJWT(tokenStr)
+		if err != nil {
+			http.Error(w, "invalid token", http.StatusUnauthorized)
 			return
 		}
 
-		claims := token.Claims.(jwt.MapClaims)
-		c.Set("userID", claims["sub"])
-		c.Next()
+		ctx := context.WithValue(r.Context(), UserIDKey, userID)
+		next(w, r.WithContext(ctx))
 	}
 }
